@@ -1,0 +1,6 @@
+libs/__pycache__/image_tools.cpython-39.pyc
+*.tif
+*.png
+*.jpg
+*.qoi
+
