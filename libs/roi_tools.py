@@ -26,8 +26,6 @@ def build_filename(output_path, roi_info, delim='_', ext='tif'):
     
     return output_path
 
-def parse_filename
-
 def export_roi(output_path, 
                filename, 
                bb, 
