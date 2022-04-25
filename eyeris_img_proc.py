@@ -9,6 +9,7 @@ import progressbar
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from loguru import logger
 from scipy import ndimage
 from skimage import filters, morphology, measure, color
 
@@ -59,6 +60,9 @@ def canny_proc(img_path, can_min=150, can_max=225, se_size=5):
 
     # make image gray scale
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # trim black bar in image
+    img = img[:,0:-60]
 
     # run canny
     cn = cv2.Canny(img, can_min, can_max)
@@ -85,9 +89,22 @@ def get_regions(masked, img, conn=2, props=None):
 
     # generate label image
     label_img = morphology.label(masked, connectivity=conn, background=0)
-
+    
     # measure the region properties
     prop_df = measure.regionprops_table(label_img, img, properties=props)
+    
+    # join bouding boxes that would overlap 
+    if len(prop_df['area']) > 0:
+        for ind in range(0,len(prop_df['area'])):
+            cv2.rectangle(masked * 0,(prop_df['bbox-1'][ind], prop_df['bbox-0'][ind]) , (prop_df['bbox-3'][ind], prop_df['bbox-2'][ind]),255,-1)
+    
+    # generate label image again
+    label_img = morphology.label(masked, connectivity=conn, background=0)
+    
+    # measure the region properties
+    prop_df = measure.regionprops_table(label_img, img, properties=props)       
+    
+
 
     return prop_df
 
@@ -115,7 +132,9 @@ if __name__ == '__main__':
     if args.out_dir:
         out_dir = args.out_dir
     else:
-        out_dir = f"{img_dir}_processed_{int(time.time())}"
+        out_path = os.path.split(img_dir)[0]
+        out_name = os.path.split(img_dir)[1]
+        out_dir = os.path.join(out_path, f"{out_name}_processed_{int(time.time())}")
         if not os.path.exists(out_dir):
             os.mkdir(out_dir)
 
@@ -124,6 +143,7 @@ if __name__ == '__main__':
 
     if edge_detect == 'canny':
         for im in progressbar.progressbar(imgs):
+            
             mm, gray = canny_proc(im)  # the edge detector
             df = get_regions(mm, gray, props=['area','bbox', 'centroid', 'equivalent_diameter'])  # get the regions as dict
             df = pd.DataFrame(df)  # make output df
