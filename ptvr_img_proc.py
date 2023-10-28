@@ -17,8 +17,8 @@ from skimage import filters, morphology, measure, color
 def sbd_proc(img_path): 
     
     params = cv2.SimpleBlobDetector_Params()
-    params.minThreshold = 10;
-    params.maxThreshold = 200;
+    params.minThreshold = 10
+    params.maxThreshold = 200
 
     params.filterByArea = True
     params.minArea = 50
