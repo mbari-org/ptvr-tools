@@ -1,0 +1,78 @@
+/*!
+
+=========================================================
+* Black Dashboard React v1.2.0
+=========================================================
+
+* Product Page: https://www.creative-tim.com/product/black-dashboard-react
+* Copyright 2020 Creative Tim (https://www.creative-tim.com)
+* Licensed under MIT (https://github.com/creativetimofficial/black-dashboard-react/blob/master/LICENSE.md)
+
+* Coded by Creative Tim
+
+=========================================================
+
+* The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+*/
+
+/*!
+
+=========================================================
+* Dual-Mag-Dash v1.0 ColSelect.js
+=========================================================
+
+* Select List in reactstrap Col
+
+* Copyright 2020 Guatek
+* Licensed under MIT (See LICENCE.md for details)
+
+=========================================================
+
+*/
+
+/*!
+
+=========================================================
+* Dual-Mag-Dash v1.0 ImageGrid.js
+=========================================================
+
+* Render a grid of ROIs or full images with detail view
+
+* Copyright 2020 Guatek
+* Licensed under MIT (See LICENCE.md for details)
+
+=========================================================
+
+*/
+
+/*!
+
+=========================================================
+* Dual-Mag-Dash v1.0 ImageViewer.js
+=========================================================
+
+* Build a card with image thumbnails and controls for 
+* page size, sort method, contrast and brightness
+
+* Copyright 2020 Guatek
+* Licensed under MIT (See LICENCE.md for details)
+
+=========================================================
+
+*/
+
+/*!
+
+=========================================================
+* Dual-Mag-Dash v1.0 Pager.js
+=========================================================
+
+* Split a total numer of items into a set and render page buttons
+
+* Copyright 2020 Guatek
+* Licensed under MIT (See LICENCE.md for details)
+
+=========================================================
+
+*/
