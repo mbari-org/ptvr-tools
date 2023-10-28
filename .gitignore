@@ -3,4 +3,5 @@ libs/__pycache__/image_tools.cpython-39.pyc
 *.png
 *.jpg
 *.qoi
+*.pyc
 
