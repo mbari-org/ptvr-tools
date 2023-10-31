@@ -13,15 +13,33 @@ from multiprocessing.pool import ThreadPool, Pool
 from multiprocessing import Process, Queue, cpu_count
 import pystache
 import numpy as np
-from loguru import logger
 
+import django
+
+# setup django env
 sys.path.append('../libs')
+sys.path.append('../../rims-ptvr')
 
+
+from loguru import logger
 from raw_image import RawImage
 from log_parser import DualMagLog
-from rois import ROI
+from roi_tools import ROI, ptvr_to_rims_filename
+from lrauv_data import LRAUVData
 
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'rims-ptvr.settings')
+django.setup()
 
+from rois.file_name_formats import FileNameFmt, ChitonFileNameFmt
+from rois.models import Image, ProcSettings, LabelSet, TagSet, Tag, Label
+
+camera_name_map = {}
+camera_name_map['low_mag_cam_rois'] = {}
+camera_name_map['high_mag_cam_rois'] = {}
+camera_name_map['low_mag_cam_rois']['V1']= 'PTVRLV1'
+camera_name_map['high_mag_cam_rois']['V1']= 'PTVRHV1'
+camera_name_map['low_mag_cam_rois']['V2']= 'PTVRLV2'
+camera_name_map['high_mag_cam_rois']['V2']= 'PTVRHV2'
 
 roi_paths = ['low_mag_cam_rois','high_mag_cam_rois']
 video_paths = ['low_mag_cam_video', 'high_mag_cam_video']
@@ -87,9 +105,10 @@ def threaded_subdir_proc(subdir_pack):
     proc_time = time.time()
 
     subdir = subdir_pack['subdir']
-    output_path = subdir_pack['output_path']
-    config = subdir_pack['config']
-    frame_increment = subdir_pack['frame_increment']
+    platform = subdir_pack['platform']
+    deployment = subdir_pack['deployment']
+    camera = subdir_pack['camera']
+    proc_settings = subdir_pack['proc_settings']
 
     if subdir[-3:] == 'tar':
         extracted_path = subdir + ".unpacked"
@@ -109,65 +128,49 @@ def threaded_subdir_proc(subdir_pack):
         rois = sorted(glob.glob(os.path.join(subdir, '*.tif')))
 
     raw_rois = []
-    frame_counter = 0
-    last_proc_frame = 0
     for roi in rois:
         roi_filename = os.path.basename(roi)
         roi_filepath = os.path.dirname(roi)
 
-        # Get frame number from filename
-        frame_number = int(roi_filename.split('-')[3])
+        # Convert to RIMS file name conventions
+        rims_name = ptvr_to_rims_filename(roi_filename, platform, deployment, camera)
+        
+        # Check for valid image
+        # skip images that have zero file size
+        if os.path.getsize(roi) <= 0:
+            logger.warning(roi + " file size is <= 0.")
+            return
+        
+        # Check if image is already in db
+        #print "Importing " + image_name
+        im = Image.objects.filter(image_id = rims_name)
+        if not im.exists():
+            im = Image(image_id=rims_name)
+        else:
+            im = im[0]
+            #print rims_name + " already exists in db, will reprocess..."
+            logger.debug(rims_name + " already exists in db, skipping...")
+            continue     
+        
+        # Import into RIMS
+        im.import_image(roi_filepath, roi_filename, proc_settings)
+        
+        im.save()
+        # Add Clipped Image tag is the image may be clipped
+        #if (im.is_clipped):
+        #    ci = Tag.objects.filter(name='Clipped Image')
+        #    im.tags.add(ci)
+        #    im.save()
 
-        # process roi if the frame number increment is okay
-        if last_proc_frame == 0 or frame_number == last_proc_frame or (frame_number - last_proc_frame >= frame_increment):
-            last_proc_frame = frame_number
-            # create output dir if needed
-            roi_timestamp = str(int(int(roi_filename.split('-')[1])/1000000/120))
-            roi_output_dir = os.path.join(output_path, roi_timestamp)
-            if not os.path.exists(roi_output_dir):
-                os.makedirs(roi_output_dir)
-
-            tmp = ROI(roi_filepath, roi_filename, roi_output_dir, cfg=config)
-            if tmp.loaded:
-                raw_rois.append(tmp)
-
-    all_rois = []
-    
-    # Process then save
-    #for i in range(0,len(raw_rois)):
-    #    raw_rois[i].process(save_to_disk=False)
-    #    all_rois.append(raw_rois[i])
-
-    for i in range(0,len(raw_rois)):
-        raw_rois[i].process(save_to_disk=False)
-        all_rois.append(raw_rois[i].get_item())
-        raw_rois[i].save_to_disk()
+        raw_rois.append(im)
 
     # remove the extracted dir
     if extracted_path is not None and os.path.exists(extracted_path):
         shutil.rmtree(extracted_path)
 
-    logger.info('Processed : ' + subdir + ' @ ' + str(len(all_rois)/(time.time() - proc_time + 1)) + ' roi/s')
+    logger.info('Processed : ' + subdir + ' @ ' + str(len(raw_rois)/(time.time() - proc_time + 1)) + ' roi/s')
 
-    return all_rois
-
-def render_template(template_name, context, webapp_output):
-
-    template = ""
-    with open(os.path.join('..','templates','js',template_name),"r") as fconv:
-        template = fconv.read()
-
-    # render the javascript page and save to disk
-    page = pystache.render(template,context)
-
-    if not os.path.exists(webapp_output):
-        os.makedirs(webapp_output)
-
-    with open(os.path.join(webapp_output,context['database_name']+'.js'),"w") as fconv:
-        fconv.write(page)
-
-def summary_item(name, value):
-    return {"name": name, "value": value}
+    return raw_rois
 
 if __name__=="__main__":
 
@@ -183,23 +186,10 @@ if __name__=="__main__":
 
         frame_increment = [1,1]
 
-        if len(sys.argv) < 2:
-            logger.exception("Please enter data directory as the first argument")
+        if len(sys.argv) != 5:
+            logger.exception('Usage: python ptvr_to_rims.py [data_dir] [camera_version] [platform] [deployment]')
+            logger.exception('Example: python python ptvr_to_rims.py 2023-10-27-12-07-27.309869056 V2 LRAH 7')
             exit(1)
-
-        if len(sys.argv) == 4:
-            try:
-                frame_increment[0] = int(sys.argv[2])
-                frame_increment[1] = int(sys.argv[3])
-                logger.info('Will process every ' + str(frame_increment[0]) + ' low_mag frame')
-                logger.info('Will process every ' + str(frame_increment[1]) + ' high_mag frame')
-            except:
-                logger.exception('Could not parse tar increments, please enter for example: 10 10 to process every 10th frame')
-                exit(1)
-
-        # Load config file
-        config = configparser.ConfigParser()
-        config.read(os.path.join("..", "config", "settings.ini"))
 
         # Check to make sure paths are okay
         dl = os.listdir(sys.argv[1])
@@ -209,6 +199,7 @@ if __name__=="__main__":
         for video_path in video_paths:
             if not video_path in dl:
                 logger.warning("Could not find: " + video_path)
+        
         
         log_file = glob.glob(os.path.join(sys.argv[1], '*.log'))
         if len(log_file) != 1:
@@ -232,66 +223,11 @@ if __name__=="__main__":
         except IOError as e:
             logger.error(e)
             exit(1)
-
-        # setup the webapp output
-        webapp_dir = 'webapp'
-
-        # copy over the base app 
-        shutil.copytree(os.path.abspath(os.path.join('..', webapp_dir)),os.path.join(output_dir,webapp_dir))
-
+    
         # # Process and export log file
         dml = DualMagLog(log_file)
         dml.parse_lines()
         dml.export(os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv'))
-
-        # start populating the summary array
-        summary_items = []
-        summary_items.append(summary_item("App Creation DateTime", datetime.datetime.now().isoformat()))
-        summary_items.append(summary_item("Data Collection DateTime", dml.log_start_time))
-
-        # set output to webapp dir for all remaing files
-        output_dir = os.path.join(output_dir,webapp_dir)
-
-        # # Process video files
-        total_vids = [] 
-        for vid_path in video_paths:
-
-            if not os.path.exists(os.path.join(sys.argv[1], vid_path)):
-                continue
-
-            # create output path is needed
-            output_path = os.path.join(output_dir, vid_path)
-            logger.info(output_path)
-            if not os.path.exists(output_path):
-                os.makedirs(output_path)
-            vids = sorted(glob.glob(os.path.join(sys.argv[1], vid_path, '*.bin')))
-            raw_videos = []
-            for vid in vids:
-                tmp = RawImage(vid, output_path)
-                if tmp.file_valid:
-                    raw_videos.append(tmp)
-                else:
-                    logger.warning("File: " + vid + " is bad, skipping.")
-
-            with futures.ThreadPoolExecutor(64) as executor:
-                result = executor.map(threaded_video_proc, raw_videos)
-            
-            #with Pool(processes=6) as p:
-            #    result = p.map(threaded_video_proc, raw_videos)
-
-            # Create image-grid
-            video_frames = []
-            for r in raw_videos:
-                for item in r.image_items:
-                    video_frames.append(item)
-            
-            total_vids.append(len(video_frames))
-
-            # render the output for webapp
-            context = {}
-            context['image_items'] = video_frames
-            context['database_name'] = vid_path
-            render_template('image-grid.stache', context, output_dir)
 
         # Process ROIs
         total_rois = []
@@ -311,11 +247,6 @@ if __name__=="__main__":
                 os.makedirs(output_path)
             # loop over tars, untar and then process subdirs
             subdirs = sorted(glob.glob(os.path.join(sys.argv[1], roi_path, '*')))
-
-            # select only a subset with tar_increment
-            # This is now handled at the frame level
-            #subdirs = subdirs[0::tar_increment[index]]
-
             
             subdir_packs = []
             #bundle_queue = Queue()
@@ -323,8 +254,10 @@ if __name__=="__main__":
                 subdir_pack = {}
                 subdir_pack['subdir'] = subdir
                 subdir_pack['output_path'] = output_path
-                subdir_pack['config'] = config
-                subdir_pack['frame_increment'] = frame_increment[index]
+                subdir_pack['platform'] = sys.argv[3]
+                subdir_pack['deployment'] = sys.argv[4]
+                subdir_pack['camera'] = camera_name_map[roi_path][sys.argv[2]]
+                subdir_pack['proc_settings'] = '/home/rimsadmin/software/rims-ptvr/rois/default_proc_settings.json'
                 #bundle_queue.put(subdir_pack)
                 subdir_packs.append(subdir_pack)
 
@@ -334,109 +267,15 @@ if __name__=="__main__":
             if n_threads < 1:
                 n_threads = 1
 
-            # output_queue = Queue()
-            # processes = []
-            # for i in range(0,n_threads):
-            #     p = Process(target=process_bundle_list, args=(bundle_queue,output_queue))
-            #     p.start()
-            #     processes.append(p)
+            for sd in subdir_packs:
+                threaded_subdir_proc(sd)
 
-            # counter = 0
-
-            # all_rois = []
-            # while True:
-
-            #     if counter >= len(subdirs):
-            #         break
-
-            #     try:
-            #         output = output_queue.get(block=True,timeout=10)
-            #         if output:
-            #             all_rois += output
-            #             counter += 1                
-            #     except:
-            #         logger.info("Queue empty")
-
-            #     time.sleep(1.0)
-
-            #     # Terminate the processes in case they are stuck
-            # for p in processes:
-            #     p.terminate()
-
-            #with futures.ThreadPoolExecutor(n_threads) as executor:
-            #    all_subdirs = executor.map(threaded_subdir_proc, subdir_packs)
-
-            with Pool(processes=n_threads) as p:
-                all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
-
-            all_rois = []
-            all_rois_without_duplicates = []
-            for subdir in all_subdirs:
-                all_rois += subdir
+            #with Pool(processes=n_threads) as p:
+            #    all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
 
             logger.info('ROIs per second: ' + str(len(all_rois)/(time.time()-roi_per_sec_timer + 1)))
 
-            # Remove duplicates by searching within a frame number and detecting any ROIs that overlap and
-            # removing all of the overlapping ROIs but the largest one
-            if len(all_rois) > 0:
-                rois_in_frame = [all_rois[0]]
-                rois_to_delete = []
-                last_frame_number = all_rois[0]['roi_info'].frame_number
-                for roi in all_rois:
-                    if roi['roi_info'].frame_number == last_frame_number:
-                        rois_in_frame.append(roi)
-                    else:
-                        # create list of duplicates to delete
-                        for i, roi_1 in enumerate(rois_in_frame[:-1]):
-                            for roi_2 in rois_in_frame[i+1:]:
-                                iou = bb_intersection_over_union(roi_1['roi_info'], roi_2['roi_info'])
-                                if iou > 0.0:
-                                    if roi_1['roi_info'].get_area() >= roi_2['roi_info'].get_area():
-                                        if roi_2 not in rois_to_delete:
-                                            rois_to_delete.append(roi_2)
-                                    else:
-                                        if roi_1 not in rois_to_delete:
-                                            rois_to_delete.append(roi_1)
-
-                        # save and append only those rois not in the list to delete
-                        for roi_s in rois_in_frame:
-                            if roi_s in rois_to_delete:
-                                logger.warning('Removing duplicate ' + roi_s['image_id'])
-                                delete_from_disk(roi_s)
-
-                            else:
-                                all_rois_without_duplicates.append(roi_s)
-                        
-                         # reset lists and frame number for next frame
-                        rois_in_frame = [roi]
-                        last_frame_number = roi['roi_info'].frame_number
-                        rois_to_delete = []
-
-            # Save the total number of ROIs processed
-            total_rois.append(len(all_rois_without_duplicates))
-
-
-            context = {}
-            context['image_items'] = all_rois_without_duplicates
-            context['database_name'] = roi_path
-            render_template('roi-grid.stache', context, output_dir)
-
             index += 1
-
-        # finalize the data summary
-        names = ['Low Mag', 'High Mag']
-        for i in range(0,len(total_rois)):
-            summary_items.append(summary_item("Total " + names[i] + " ROIs", total_rois[i]))
-        for i in range(0,len(total_vids)):
-            summary_items.append(summary_item("Total " + names[i] + " Saved Images", total_vids[i]))
-
-        summary_items.append(summary_item("Data Processing Time (s)", time.time() - start_time))
-        summary_items.append(summary_item("Log file csv export path", os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv').replace("\\","/")))
-
-        context = {}
-        context['database_name'] = 'dual_mag_summary'
-        context['summary_items'] = summary_items
-        render_template('summary.stache', context, output_dir)
 
         pr.disable()
         pr.dump_stats("profile_result.txt")
