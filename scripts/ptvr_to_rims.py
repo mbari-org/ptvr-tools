@@ -36,13 +36,15 @@ from rois.models import Image, ProcSettings, LabelSet, TagSet, Tag, Label
 camera_name_map = {}
 camera_name_map['low_mag_cam_rois'] = {}
 camera_name_map['high_mag_cam_rois'] = {}
-camera_name_map['low_mag_cam_rois']['V1']= 'PTVRLV1'
-camera_name_map['high_mag_cam_rois']['V1']= 'PTVRHV1'
-camera_name_map['low_mag_cam_rois']['V2']= 'PTVRLV2'
-camera_name_map['high_mag_cam_rois']['V2']= 'PTVRHV2'
+camera_name_map['low_mag_cam_rois']['V1']= 'PTVR01LM'
+camera_name_map['high_mag_cam_rois']['V1']= 'PTVR01HM'
+camera_name_map['low_mag_cam_rois']['V2']= 'PTVR02LM'
+camera_name_map['high_mag_cam_rois']['V2']= 'PTVR02HM'
+camera_name_map['low_mag_cam_rois']['V3']= 'PTVR03LM'
+camera_name_map['high_mag_cam_rois']['V3']= 'PTVR03HM'
 
-roi_paths = ['low_mag_cam_rois','high_mag_cam_rois']
-video_paths = ['low_mag_cam_video', 'high_mag_cam_video']
+roi_paths = ['low_mag_cam_rois', 'high_mag_cam_rois']
+video_paths = []
 
 output_path = ''
 
@@ -109,6 +111,7 @@ def threaded_subdir_proc(subdir_pack):
     deployment = subdir_pack['deployment']
     camera = subdir_pack['camera']
     proc_settings = subdir_pack['proc_settings']
+    timestamp_delta = subdir_pack['timestamp_delta']
 
     if subdir[-3:] == 'tar':
         extracted_path = subdir + ".unpacked"
@@ -133,7 +136,7 @@ def threaded_subdir_proc(subdir_pack):
         roi_filepath = os.path.dirname(roi)
 
         # Convert to RIMS file name conventions
-        rims_name = ptvr_to_rims_filename(roi_filename, platform, deployment, camera)
+        rims_name = ptvr_to_rims_filename(roi_filename, platform, deployment, camera, timestamp_delta=timestamp_delta)
         
         # Check for valid image
         # skip images that have zero file size
@@ -153,16 +156,19 @@ def threaded_subdir_proc(subdir_pack):
             continue     
         
         # Import into RIMS
-        im.import_image(roi_filepath, roi_filename, proc_settings)
-        
-        im.save()
-        # Add Clipped Image tag is the image may be clipped
-        #if (im.is_clipped):
-        #    ci = Tag.objects.filter(name='Clipped Image')
-        #    im.tags.add(ci)
-        #    im.save()
+        if im.import_image(roi_filepath, roi_filename, proc_settings):
+            raw_rois.append(im)
+            im.save()
+            # Add Clipped Image tag is the image may be clipped
+            if (im.is_clipped):
+                ci = Tag.objects.filter(name='Clipped Image')[0]
+                im.tags.add(ci)
+                im.save()
 
-        raw_rois.append(im)
+            # Save the image to the DB
+            
+
+        
 
     # remove the extracted dir
     if extracted_path is not None and os.path.exists(extracted_path):
@@ -186,7 +192,7 @@ if __name__=="__main__":
 
         frame_increment = [1,1]
 
-        if len(sys.argv) != 5:
+        if len(sys.argv) != 5 and len(sys.argv) != 7:
             logger.exception('Usage: python ptvr_to_rims.py [data_dir] [camera_version] [platform] [deployment]')
             logger.exception('Example: python python ptvr_to_rims.py 2023-10-27-12-07-27.309869056 V2 LRAH 7')
             exit(1)
@@ -225,9 +231,10 @@ if __name__=="__main__":
             exit(1)
     
         # # Process and export log file
-        dml = DualMagLog(log_file)
-        dml.parse_lines()
-        dml.export(os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv'))
+        # Do not parse logs for RIMS import
+        #dml = DualMagLog(log_file)
+        #dml.parse_lines()
+        #dml.export(os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv'))
 
         # Process ROIs
         total_rois = []
@@ -258,6 +265,10 @@ if __name__=="__main__":
                 subdir_pack['deployment'] = sys.argv[4]
                 subdir_pack['camera'] = camera_name_map[roi_path][sys.argv[2]]
                 subdir_pack['proc_settings'] = '/home/rimsadmin/software/rims-ptvr/rois/default_proc_settings.json'
+                if len(sys.argv) == 7:
+                    subdir_pack['timestamp_delta'] = datetime.timedelta(days=int(sys.argv[5]), seconds=int(sys.argv[6]))
+                else:
+                    subdir_pack['timestamp_delta'] = None
                 #bundle_queue.put(subdir_pack)
                 subdir_packs.append(subdir_pack)
 
@@ -267,11 +278,13 @@ if __name__=="__main__":
             if n_threads < 1:
                 n_threads = 1
 
-            for sd in subdir_packs:
-                threaded_subdir_proc(sd)
+            # Single threaded import
+            #for sd in subdir_packs:
+            #    threaded_subdir_proc(sd)
 
-            #with Pool(processes=n_threads) as p:
-            #    all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
+            # Multithreaded import
+            with Pool(processes=n_threads) as p:
+                all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
 
             logger.info('ROIs per second: ' + str(len(all_rois)/(time.time()-roi_per_sec_timer + 1)))
 

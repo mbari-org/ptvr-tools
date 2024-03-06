@@ -27,10 +27,15 @@ https://github.com/planktivore/SPCConvert/blob/master/cvtools.py
 @license: __license__
 '''
 
-def ptvr_to_rims_filename(filename, platform, deployment, camera, delim='_',ext = '.tif'):
+def ptvr_to_rims_filename(filename, platform, deployment, camera, delim='_',ext = '.tif', timestamp_delta=None):
     
     # high_mag_cam-1677764904992599-3023919178192-29520-000-1868-1422-52-64.tif
     timestamp = datetime.datetime.fromtimestamp(float(filename.split('-')[1])/1000000)
+    
+    # Fix bug in timestamp recording with offset
+    if timestamp_delta is not None:
+        timestamp = timestamp + timestamp_delta
+    
     timestring = timestamp.isoformat()
     timestring = "".join(timestring).replace('-','')
     timestring = "".join(timestring).replace(':','') + "Z"
