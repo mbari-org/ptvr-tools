@@ -114,19 +114,23 @@ def threaded_subdir_proc(subdir_pack):
     timestamp_delta = subdir_pack['timestamp_delta']
 
     if subdir[-3:] == 'tar':
-        extracted_path = subdir + ".unpacked"
-        if not os.path.exists(extracted_path):
-            try:
-                os.makedirs(extracted_path)
-            except:
-                logger.warning("Path exists, won't create a new one")
-        with tarfile.open(subdir) as archive:
-            for member in archive.getmembers():
-                if member.isreg():  # skip if the TarInfo is not files
-                    member.name = os.path.basename(member.name) # remove the path by reset it
-                    archive.extract(member,extracted_path) # extract
+        try:
+            extracted_path = subdir + ".unpacked"
+            if not os.path.exists(extracted_path):
+                try:
+                    os.makedirs(extracted_path)
+                except:
+                    logger.warning("Path exists, won't create a new one")
+            with tarfile.open(subdir) as archive:
+                for member in archive.getmembers():
+                    if member.isreg():  # skip if the TarInfo is not files
+                        member.name = os.path.basename(member.name) # remove the path by reset it
+                        archive.extract(member,extracted_path) # extract
 
-        rois = sorted(glob.glob(os.path.join(extracted_path, '*.tif')))
+            rois = sorted(glob.glob(os.path.join(extracted_path, '*.tif')))
+        except Exception as e:
+            logger.error(e)
+            rois = []
     else:
         rois = sorted(glob.glob(os.path.join(subdir, '*.tif')))
 
@@ -185,9 +189,6 @@ if __name__=="__main__":
 
     with logger.catch():
 
-        pr = cProfile.Profile()
-        pr.enable()
-
         start_time = time.time()
 
         frame_increment = [1,1]
@@ -197,99 +198,102 @@ if __name__=="__main__":
             logger.exception('Example: python python ptvr_to_rims.py 2023-10-27-12-07-27.309869056 V2 LRAH 7')
             exit(1)
 
-        # Check to make sure paths are okay
-        dl = os.listdir(sys.argv[1])
-        for roi_path in roi_paths:
-            if not roi_path in dl:
-                logger.warning("Could not find: " + roi_path)
-        for video_path in video_paths:
-            if not video_path in dl:
-                logger.warning("Could not find: " + video_path)
-        
-        
-        log_file = glob.glob(os.path.join(sys.argv[1], '*.log'))
-        if len(log_file) != 1:
-            logger.error("Missing or multiple log files")
-            exit(1)
-        else:
-            log_file = log_file[0]
 
-        try:
+        data_dir_list = sorted(glob.glob(os.path.join(sys.argv[1],'*')))
+        data_dir_list = data_dir_list[2:]
+        for data_dir in data_dir_list:
+            
+            logger.info('Processing ' + data_dir)
 
-            # create output directory and populate
-            output_dir = os.path.join(sys.argv[1],'processed-'+os.path.basename(sys.argv[1]))
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
+            # Check to make sure paths are okay
+            dl = os.listdir(data_dir)
+            for roi_path in roi_paths:
+                if not roi_path in dl:
+                    logger.warning("Could not find: " + roi_path)
+            for video_path in video_paths:
+                if not video_path in dl:
+                    logger.warning("Could not find: " + video_path)
+            
+            
+            log_file = glob.glob(os.path.join(data_dir, '*.log'))
+            if len(log_file) != 1:
+                logger.error("Missing or multiple log files")
+                exit(1)
             else:
-                pass
-                shutil.rmtree(output_dir)
-                time.sleep(2)
-                os.makedirs(output_dir)
+                log_file = log_file[0]
 
-        except IOError as e:
-            logger.error(e)
-            exit(1)
-    
-        # # Process and export log file
-        # Do not parse logs for RIMS import
-        #dml = DualMagLog(log_file)
-        #dml.parse_lines()
-        #dml.export(os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv'))
+            try:
 
-        # Process ROIs
-        total_rois = []
-        index = 0
-        for roi_path in roi_paths:
-
-            if not os.path.exists(os.path.join(sys.argv[1], roi_path)):
-                continue
-
-            all_rois = []
-
-            # create output path is needed
-            output_path = os.path.join(output_dir, roi_path)
-            
-            logger.info(output_path)
-            if not os.path.exists(output_path):
-                os.makedirs(output_path)
-            # loop over tars, untar and then process subdirs
-            subdirs = sorted(glob.glob(os.path.join(sys.argv[1], roi_path, '*')))
-            
-            subdir_packs = []
-            #bundle_queue = Queue()
-            for subdir in subdirs:
-                subdir_pack = {}
-                subdir_pack['subdir'] = subdir
-                subdir_pack['output_path'] = output_path
-                subdir_pack['platform'] = sys.argv[3]
-                subdir_pack['deployment'] = sys.argv[4]
-                subdir_pack['camera'] = camera_name_map[roi_path][sys.argv[2]]
-                subdir_pack['proc_settings'] = '/home/rimsadmin/software/rims-ptvr/rois/default_proc_settings.json'
-                if len(sys.argv) == 7:
-                    subdir_pack['timestamp_delta'] = datetime.timedelta(days=int(sys.argv[5]), seconds=int(sys.argv[6]))
+                # create output directory and populate
+                output_dir = os.path.join(data_dir,'processed-'+os.path.basename(data_dir))
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
                 else:
-                    subdir_pack['timestamp_delta'] = None
-                #bundle_queue.put(subdir_pack)
-                subdir_packs.append(subdir_pack)
+                    shutil.rmtree(output_dir)
+                    time.sleep(2)
+                    os.makedirs(output_dir)
 
-            roi_per_sec_timer = time.time()
+            except IOError as e:
+                logger.error(e)
+                exit(1)
+        
+            # # Process and export log file
+            # Do not parse logs for RIMS import
+            #dml = DualMagLog(log_file)
+            #dml.parse_lines()
+            #dml.export(os.path.join(output_dir, os.path.basename(log_file)[:-4] + '.csv'))
 
-            n_threads = int(cpu_count()/2) - 3
-            if n_threads < 1:
-                n_threads = 1
+            # Process ROIs
+            total_rois = []
+            index = 0
+            for roi_path in roi_paths:
 
-            # Single threaded import
-            #for sd in subdir_packs:
-            #    threaded_subdir_proc(sd)
+                if not os.path.exists(os.path.join(data_dir, roi_path)):
+                    continue
 
-            # Multithreaded import
-            with Pool(processes=n_threads) as p:
-                all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
+                all_rois = []
 
-            logger.info('ROIs per second: ' + str(len(all_rois)/(time.time()-roi_per_sec_timer + 1)))
+                # create output path is needed
+                output_path = os.path.join(output_dir, roi_path)
+                
+                logger.info(output_path)
+                if not os.path.exists(output_path):
+                    os.makedirs(output_path)
+                # loop over tars, untar and then process subdirs
+                subdirs = sorted(glob.glob(os.path.join(data_dir, roi_path, '*')))
+                
+                subdir_packs = []
+                #bundle_queue = Queue()
+                for subdir in subdirs:
+                    subdir_pack = {}
+                    subdir_pack['subdir'] = subdir
+                    subdir_pack['output_path'] = output_path
+                    subdir_pack['platform'] = sys.argv[3]
+                    subdir_pack['deployment'] = sys.argv[4]
+                    subdir_pack['camera'] = camera_name_map[roi_path][sys.argv[2]]
+                    subdir_pack['proc_settings'] = '/home/rimsadmin/software/rims-ptvr/rois/ptvr_proc_settings.json'
+                    if len(sys.argv) == 7:
+                        subdir_pack['timestamp_delta'] = datetime.timedelta(days=int(sys.argv[5]), seconds=int(sys.argv[6]))
+                    else:
+                        subdir_pack['timestamp_delta'] = None
+                    #bundle_queue.put(subdir_pack)
+                    subdir_packs.append(subdir_pack)
 
-            index += 1
+                roi_per_sec_timer = time.time()
 
-        pr.disable()
-        pr.dump_stats("profile_result.txt")
+                n_threads = int(cpu_count()/2) - 3
+                if n_threads < 1:
+                    n_threads = 1
+
+                # Single threaded import
+                #for sd in subdir_packs:
+                #    threaded_subdir_proc(sd)
+
+                # Multithreaded import
+                with Pool(processes=n_threads) as p:
+                    all_subdirs = p.map(threaded_subdir_proc, subdir_packs)
+
+                logger.info('ROIs per second: ' + str(len(all_rois)/(time.time()-roi_per_sec_timer + 1)))
+
+                index += 1
         
